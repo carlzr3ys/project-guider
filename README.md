@@ -30,7 +30,7 @@ TELEGRAM_BOT_TOKEN=123456:ABC...
 TELEGRAM_BOT_USERNAME=YourBotUsername
 TELEGRAM_CHAT_ID=-100xxxxxxxxxx
 VITE_TELEGRAM_BOT_USERNAME=YourBotUsername
-VITE_TELEGRAM_CHANNEL=https://t.me/+uD81UyseH_tkZGU1
+VITE_TELEGRAM_CHANNEL=https://t.me/+************
 ```
 
 ## Run
@@ -39,15 +39,4 @@ VITE_TELEGRAM_CHANNEL=https://t.me/+uD81UyseH_tkZGU1
 npm install
 npm run dev
 ```
-
-This starts:
-- Web app: `http://localhost:5173`
-- Auth API: `http://localhost:8787`
-
-## Admin login (site admins)
-
-Default:
-- `ree` / `ree123`
-- `luq` / `luq123`
-
 Admins can change password, edit own profile only, add admins, and approve join requests.
