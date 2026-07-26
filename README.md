@@ -2,8 +2,7 @@
 
 React (Vite) site for Free / Not too busy / Busy status, Telegram-authenticated booking, and admin tools.
 
-Telegram channel: https://t.me/+uD81UyseH_tkZGU1
-
+Telegram channel: https://t.me/+**************
 ## Features
 
 - Public status board for guides
