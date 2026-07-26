@@ -1,41 +1,80 @@
-# Project Guider By Ree & Luq
+# Project Guider
 
-React (Vite) site for Free / Not too busy / Busy status, Telegram-authenticated booking, and admin tools.
+A modern, secure service provider web application built with **React (Vite)** and **Node.js (Express)**. Features Telegram-authenticated booking, real-time availability status, server-persisted join requests, and an administrative dashboard.
 
-Telegram channel: https://t.me/+**************
-## Features
+---
 
-- Public status board for guides
-- Users **log in with Telegram** to book
-- Server verifies the user is a **member of your Telegram group**
-- Booking uses Telegram identity automatically (no username field)
-- Admin panel: profile, password, status, add admin, join requests, booking inbox
+## ✨ Features
 
-## Setup Telegram login (required for booking)
+- 🟢 **Live Guide Availability Board**: Real-time status indicators (Free / Chill / Busy) for project guides.
+- 💬 **Telegram-Authenticated Bookings**: Direct integration with Telegram Widget for automated user identity verification.
+- 🔒 **Security Hardened**:
+  - `scrypt` password hashing with unique salts & timing-safe verification (`crypto.timingSafeEqual`).
+  - Sliding-window rate limiting on login, join requests, and booking endpoints.
+  - Strict Cross-Origin Resource Sharing (CORS) origin verification.
+  - Anti-CSRF token protection on state-changing API routes.
+  - Security headers (`nosniff`, `X-Frame-Options`, `Content-Security-Policy`).
+  - Atomic file store writes (`atomicWriteFileSync`) to prevent database corruption under concurrency.
+- 📩 **Server-Persisted Join Requests**: Service provider applications are persisted centrally on the Node.js server and synchronized in real-time across all admin sessions.
+- 🛠️ **Admin Dashboard**: Profile customization, status updates, team member creation, and application management.
+- 🚀 **cPanel & Production Ready**: Pre-configured CommonJS bridge (`app.cjs`) and automated cPanel packaging tools for seamless hosting deployment.
 
-1. Open [@BotFather](https://t.me/BotFather) → create a bot → copy **token** and **username**
-2. Add the bot as **admin** in your Project Guider group/channel
-3. Get the numeric **chat id** (example tools: `@userinfobot` / `@RawDataBot` inside the group, or forward a group message to a chat-id bot)
-4. In BotFather: `/setdomain` → choose your bot → set your website domain  
-   - Local testing usually needs a public HTTPS tunnel (e.g. ngrok) pointing to Vite
-5. Copy env file and fill values:
+---
 
+## 🚀 Quick Start (Local Development)
+
+### 1. Clone the repository
+```bash
+git clone https://github.com/carlzr3ys/project-guider.git
+cd project-guider
+```
+
+### 2. Install dependencies
+```bash
+npm install
+```
+
+### 3. Configure Environment Variables
+Copy `.env.example` to create your local `.env` file:
 ```bash
 cp .env.example .env
 ```
 
+Edit `.env` and fill in your configuration:
 ```env
-TELEGRAM_BOT_TOKEN=123456:ABC...
-TELEGRAM_BOT_USERNAME=YourBotUsername
+PORT=8787
+ALLOWED_ORIGINS=http://localhost:5173,http://127.0.0.1:5173,http://localhost:8787,http://127.0.0.1:8787
+
+# Admin Passwords
+ADMIN_REE_PASSWORD=YourLocalPasswordRee
+ADMIN_LUQ_PASSWORD=YourLocalPasswordLuq
+
+# Telegram Bot Credentials (Required for booking authentication)
+TELEGRAM_BOT_TOKEN=your_bot_token_here
+TELEGRAM_BOT_USERNAME=your_bot_username
 TELEGRAM_CHAT_ID=-100xxxxxxxxxx
-VITE_TELEGRAM_BOT_USERNAME=YourBotUsername
-VITE_TELEGRAM_CHANNEL=https://t.me/+************
+TELEGRAM_CHANNEL_URL=https://t.me/projectguider
 ```
 
-## Run
-
+### 4. Run Development Server
 ```bash
-npm install
 npm run dev
 ```
-Admins can change password, edit own profile only, add admins, and approve join requests.
+Access the application at `http://localhost:5173` (Frontend) and `http://localhost:8787` (Backend API).
+
+---
+
+## 🛠️ Scripts & Build Commands
+
+- `npm run dev`: Runs frontend (Vite) and backend (Express) concurrently.
+- `npm run build`: Compiles production frontend bundle to `dist/`.
+- `npm run pack:cpanel`: Builds production assets and packages a ready-to-upload `cpanel-upload.zip` file.
+
+---
+
+## 🌐 Production & cPanel Deployment Guide
+
+For full step-by-step instructions on deploying and updating this application on cPanel hosting, see [CPANEL_DEPLOYMENT_GUIDE.md](file:///CPANEL_DEPLOYMENT_GUIDE.md) and security documentation in [SECURITY_UPDATES.md](file:///SECURITY_UPDATES.md).
+
+---
+*Built with ❤️ for Project Guider.*
