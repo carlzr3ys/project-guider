@@ -2,29 +2,10 @@ export const BRAND = {
   name: 'Project Guider',
   tagline: 'By Ree & Luq',
   fullName: 'Project Guider By Ree & Luq',
-  telegramChannel: 'https://t.me/+uD81UyseH_tkZGU1',
+  telegramChannel: import.meta.env.VITE_TELEGRAM_CHANNEL || '',
   description:
     'Stuck with a coding/programming project? Reach out to our admins for guidance.',
 }
-
-/** Seed accounts — stored in localStorage after first load */
-export const DEFAULT_ADMIN_ACCOUNTS = [
-  {
-    username: 'ree',
-    password: 'ree123',
-    displayName: 'Ree',
-    freelancerId: 'ree',
-  },
-  {
-    username: 'luq',
-    password: 'luq123',
-    displayName: 'Luq',
-    freelancerId: 'luq',
-  },
-]
-
-/** @deprecated use store.admins — kept for older session migration */
-export const ADMIN_ACCOUNTS = DEFAULT_ADMIN_ACCOUNTS
 
 export const AUTH_STORAGE_KEY = 'project_guider_admin_session'
 
@@ -46,8 +27,6 @@ export const DEFAULT_FREELANCERS = [
       telegram: 'reereeassign',
       telegramUrl: 'https://t.me/reereeassign',
     },
-    // Numeric Telegram user id for bot DMs (must /start the bot first)
-    notifyChatId: '883323653',
     avatar: 'RE',
     photoUrl: '',
   },
@@ -61,12 +40,25 @@ export const DEFAULT_FREELANCERS = [
       telegram: 'Qaqu0',
       telegramUrl: 'https://t.me/Qaqu0',
     },
-    // Numeric id — @username DM often fails with "chat not found"
-    notifyChatId: '7912382530',
     avatar: 'LQ',
     photoUrl: '',
   },
 ]
+
+export const DEFAULT_ADMIN_ACCOUNTS = [
+  {
+    username: 'ree',
+    displayName: 'Ree',
+    freelancerId: 'ree',
+  },
+  {
+    username: 'luq',
+    displayName: 'Luq',
+    freelancerId: 'luq',
+  },
+]
+
+export const ADMIN_ACCOUNTS = DEFAULT_ADMIN_ACCOUNTS
 
 export function slugifyUsername(value) {
   return String(value || '')
@@ -91,7 +83,6 @@ function mergeFreelancer(base, saved = {}) {
     },
     bio: saved.bio ?? base.bio ?? '',
     photoUrl: saved.photoUrl || '',
-    notifyChatId: saved.notifyChatId || base.notifyChatId || '',
     avatar: saved.avatar || base.avatar || 'PG',
     status:
       saved.status === 'busy'

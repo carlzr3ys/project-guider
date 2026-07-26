@@ -18,11 +18,11 @@ export default function JoinTeamSection({ onSubmit }) {
     setForm((prev) => ({ ...prev, [name]: value }))
   }
 
-  function handleSubmit(e) {
+  async function handleSubmit(e) {
     e.preventDefault()
-    const result = onSubmit(form)
-    if (!result.ok) {
-      setError(result.error)
+    const result = await onSubmit(form)
+    if (!result || !result.ok) {
+      setError(result?.error || 'Could not submit request.')
       setSuccess('')
       return
     }

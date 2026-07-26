@@ -1,9 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   fetchFreelancers,
+  fetchJoinRequests,
+  pushJoinRequest,
   pushProfile,
   pushStatus,
   pushTeam,
+  resolveJoinRequestApi,
 } from '../api/storeApi'
 import {
   isValidUsername,
@@ -80,6 +83,18 @@ export function useStore() {
       } catch {
         serverSyncRef.current = false
       }
+      try {
+        const serverRequests = await fetchJoinRequests()
+        if (alive && Array.isArray(serverRequests) && serverRequests.length > 0) {
+          setJoinRequests((prev) => {
+            const map = new Map()
+            for (const r of [...serverRequests, ...prev]) {
+              if (!map.has(r.id)) map.set(r.id, r)
+            }
+            return Array.from(map.values())
+          })
+        }
+      } catch {}
     }
 
     pullFromServer()
@@ -157,11 +172,9 @@ export function useStore() {
   )
 
   const findAdmin = useCallback(
-    (username, password) =>
+    (username) =>
       admins.find(
-        (a) =>
-          a.username.toLowerCase() === String(username || '').toLowerCase() &&
-          a.password === password,
+        (a) => a.username.toLowerCase() === String(username || '').toLowerCase(),
       ),
     [admins],
   )
@@ -176,7 +189,7 @@ export function useStore() {
       prev.map((f) => (f.id === id ? { ...f, status: nextStatus } : f)),
     )
 
-    if (!credentials?.username || !credentials?.password) {
+    if (!credentials?.username) {
       return {
         ok: false,
         error: 'Re-login as admin so status can sync for everyone.',
@@ -204,9 +217,6 @@ export function useStore() {
     const role = updates.role?.trim()
     const bio = updates.bio?.trim()
     const telegram = updates.telegram?.trim().replace(/^@/, '')
-    const notifyChatId = String(updates.notifyChatId || '')
-      .trim()
-      .replace(/[^\d-]/g, '')
 
     if (!name) return { ok: false, error: 'Name cannot be empty.' }
     if (!role) return { ok: false, error: 'Title / role cannot be empty.' }
@@ -222,10 +232,6 @@ export function useStore() {
           avatar: initialsFromName(name),
           photoUrl:
             updates.photoUrl === undefined ? f.photoUrl : updates.photoUrl,
-          notifyChatId:
-            updates.notifyChatId === undefined
-              ? f.notifyChatId || ''
-              : notifyChatId,
           contact: {
             ...f.contact,
             telegram: telegram || f.contact.telegram,
@@ -243,7 +249,7 @@ export function useStore() {
       ),
     )
 
-    if (credentials?.username && credentials?.password) {
+    if (credentials?.username) {
       try {
         const list = await pushProfile({
           id: actorId,
@@ -252,7 +258,6 @@ export function useStore() {
             role,
             bio: bio || '',
             telegram,
-            notifyChatId,
             photoUrl: updates.photoUrl,
           },
           username: credentials.username,
@@ -277,11 +282,8 @@ export function useStore() {
         (a) => a.username.toLowerCase() === String(username || '').toLowerCase(),
       )
       if (!account) return { ok: false, error: 'Account not found.' }
-      if (account.password !== currentPassword) {
-        return { ok: false, error: 'Current password is incorrect.' }
-      }
-      if (!newPassword || newPassword.length < 6) {
-        return { ok: false, error: 'New password must be at least 6 characters.' }
+      if (!newPassword || newPassword.length < 8) {
+        return { ok: false, error: 'New password must be at least 8 characters.' }
       }
       if (newPassword !== confirmPassword) {
         return { ok: false, error: 'New passwords do not match.' }
@@ -289,18 +291,18 @@ export function useStore() {
 
       const nextAdmins = admins.map((a) =>
         a.username.toLowerCase() === account.username.toLowerCase()
-          ? { ...a, password: newPassword }
+          ? { ...a }
           : a,
       )
       setAdmins(nextAdmins)
 
-      if (credentials?.username && credentials?.password) {
+      if (credentials?.username) {
         try {
           await pushTeam({
             freelancers,
             admins: nextAdmins,
             username: credentials.username,
-            password: credentials.password,
+            password: credentials.password || currentPassword,
           })
         } catch (error) {
           return { ok: false, error: error.message || 'Could not sync password.' }
@@ -327,8 +329,8 @@ export function useStore() {
           error: 'Username must be 3–20 characters (a-z, 0-9, _).',
         }
       }
-      if (password.length < 6) {
-        return { ok: false, error: 'Password must be at least 6 characters.' }
+      if (password.length < 8) {
+        return { ok: false, error: 'Password must be at least 8 characters.' }
       }
       if (!name) return { ok: false, error: 'Name is required.' }
       if (admins.some((a) => a.username.toLowerCase() === username)) {
@@ -340,7 +342,6 @@ export function useStore() {
 
       const account = {
         username,
-        password,
         displayName: name,
         freelancerId: username,
       }
@@ -359,7 +360,7 @@ export function useStore() {
       setAdmins(nextAdmins)
       setFreelancers(nextFreelancers)
 
-      if (credentials?.username && credentials?.password) {
+      if (credentials?.username) {
         try {
           const list = await pushTeam({
             freelancers: nextFreelancers,
@@ -379,7 +380,7 @@ export function useStore() {
   )
 
   const submitJoinRequest = useCallback(
-    (payload) => {
+    async (payload) => {
       const name = payload.name?.trim()
       const telegram = slugifyUsername(payload.telegram)
       const username = slugifyUsername(payload.username)
@@ -397,29 +398,17 @@ export function useStore() {
       if (admins.some((a) => a.username.toLowerCase() === username)) {
         return { ok: false, error: 'That username is already taken.' }
       }
-      if (
-        joinRequests.some(
-          (r) => r.status === 'pending' && r.username === username,
-        )
-      ) {
-        return { ok: false, error: 'A pending request already uses that username.' }
+
+      const res = await pushJoinRequest({ name, telegram, username, role, message })
+      if (!res || !res.ok) {
+        return res || { ok: false, error: 'Could not submit join request.' }
       }
 
-      const request = {
-        id: `jr_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
-        createdAt: new Date().toISOString(),
-        status: 'pending',
-        name,
-        telegram,
-        username,
-        role,
-        message,
-      }
-
-      setJoinRequests((prev) => [request, ...prev])
+      const request = res.request
+      setJoinRequests((prev) => [request, ...prev.filter((r) => r.id !== request.id)])
       return { ok: true, request }
     },
-    [admins, joinRequests],
+    [admins],
   )
 
   const approveJoinRequest = useCallback(
@@ -455,25 +444,31 @@ export function useStore() {
         ),
       )
 
+      await resolveJoinRequestApi(requestId, 'approved', credentials)
+
       return { ok: true, account: created.account }
     },
     [addAdmin, joinRequests],
   )
 
-  const rejectJoinRequest = useCallback((requestId) => {
-    setJoinRequests((prev) =>
-      prev.map((r) =>
-        r.id === requestId
-          ? {
-              ...r,
-              status: 'rejected',
-              resolvedAt: new Date().toISOString(),
-            }
-          : r,
-      ),
-    )
-    return { ok: true }
-  }, [])
+  const rejectJoinRequest = useCallback(
+    async (requestId, credentials) => {
+      setJoinRequests((prev) =>
+        prev.map((r) =>
+          r.id === requestId
+            ? {
+                ...r,
+                status: 'rejected',
+                resolvedAt: new Date().toISOString(),
+              }
+            : r,
+        ),
+      )
+      await resolveJoinRequestApi(requestId, 'rejected', credentials)
+      return { ok: true }
+    },
+    [],
+  )
 
   const addBooking = useCallback((payload) => {
     const booking = {

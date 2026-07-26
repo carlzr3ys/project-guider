@@ -17,11 +17,132 @@ const CHAT_ID = process.env.TELEGRAM_CHAT_ID || ''
 const AUTH_MAX_AGE_SEC = Number(process.env.TELEGRAM_AUTH_MAX_AGE || 86400)
 const distDir = path.join(rootDir, 'dist')
 
+const MAX_SESSIONS = 1000
 const sessions = new Map()
 
-app.use(cors({ origin: true, credentials: true }))
-app.use(express.json({ limit: '3mb' }))
+// Clean up expired sessions periodically (every 10 minutes)
+setInterval(() => {
+  const now = Date.now()
+  for (const [token, session] of sessions.entries()) {
+    if (session.expiresAt <= now) {
+      sessions.delete(token)
+    }
+  }
+}, 10 * 60 * 1000)
 
+// --- Security Headers Middleware ---
+app.use((req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff')
+  res.setHeader('X-Frame-Options', 'DENY')
+  res.setHeader('X-XSS-Protection', '0')
+  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin')
+  res.setHeader(
+    'Content-Security-Policy',
+    "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; connect-src 'self' https://api.telegram.org; frame-ancestors 'none';",
+  )
+  next()
+})
+
+// --- Restricted CORS Configuration ---
+const configuredAllowedOrigins = (process.env.ALLOWED_ORIGINS || '')
+  .split(',')
+  .map((s) => s.trim())
+  .filter(Boolean)
+
+const defaultAllowedOrigins = [
+  'http://localhost:5173',
+  'http://127.0.0.1:5173',
+  'http://localhost:8787',
+  'http://127.0.0.1:8787',
+]
+
+const allowedOriginsSet = new Set([...configuredAllowedOrigins, ...defaultAllowedOrigins])
+
+app.use(
+  cors({
+    origin: function (origin, callback) {
+      if (!origin || allowedOriginsSet.has(origin)) {
+        callback(null, true)
+      } else {
+        callback(new Error('Not allowed by CORS'))
+      }
+    },
+    credentials: true,
+  }),
+)
+
+app.use(express.json({ limit: '1mb' }))
+
+// --- Rate Limiting Middleware ---
+function createRateLimiter({ windowMs, max, message }) {
+  const hits = new Map()
+
+  setInterval(() => {
+    const now = Date.now()
+    for (const [ip, record] of hits.entries()) {
+      if (record.resetTime <= now) {
+        hits.delete(ip)
+      }
+    }
+  }, 60000)
+
+  return function (req, res, next) {
+    const ip = req.ip || req.headers['x-forwarded-for'] || req.socket.remoteAddress || 'unknown'
+    const now = Date.now()
+    const record = hits.get(ip) || { count: 0, resetTime: now + windowMs }
+
+    if (now > record.resetTime) {
+      record.count = 1
+      record.resetTime = now + windowMs
+    } else {
+      record.count += 1
+    }
+
+    hits.set(ip, record)
+
+    if (record.count > max) {
+      return res.status(429).json({
+        ok: false,
+        error: message || 'Too many requests. Please try again later.',
+      })
+    }
+    next()
+  }
+}
+
+const adminLoginLimiter = createRateLimiter({
+  windowMs: 15 * 60 * 1000,
+  max: 5,
+  message: 'Too many admin login attempts. Please try again after 15 minutes.',
+})
+
+const telegramAuthLimiter = createRateLimiter({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  message: 'Too many auth attempts. Please try again later.',
+})
+
+const notifyLimiter = createRateLimiter({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  message: 'Too many booking notification requests. Please try again later.',
+})
+
+const joinRequestLimiter = createRateLimiter({
+  windowMs: 15 * 60 * 1000,
+  max: 5,
+  message: 'Too many join requests. Please try again later.',
+})
+
+const generalApiLimiter = createRateLimiter({
+  windowMs: 15 * 60 * 1000,
+  max: 200,
+  message: 'API rate limit exceeded.',
+})
+
+app.use('/api', generalApiLimiter)
+
+// --- Helper Functions ---
 function configured() {
   return Boolean(BOT_TOKEN && BOT_USERNAME && CHAT_ID)
 }
@@ -73,13 +194,27 @@ async function checkGroupMembership(userId) {
   return { ok: true, isMember, status, error: null }
 }
 
-function createSession(user, membership) {
-  const token = crypto.randomBytes(24).toString('hex')
+function createSession(user, membership = {}, type = 'telegram') {
+  if (sessions.size >= MAX_SESSIONS) {
+    const now = Date.now()
+    for (const [t, s] of sessions.entries()) {
+      if (s.expiresAt <= now) sessions.delete(t)
+    }
+    if (sessions.size >= MAX_SESSIONS) {
+      const oldestKey = sessions.keys().next().value
+      if (oldestKey) sessions.delete(oldestKey)
+    }
+  }
+
+  const token = crypto.randomBytes(32).toString('hex')
+  const csrfToken = crypto.randomBytes(24).toString('hex')
   const session = {
     token,
+    csrfToken,
     user,
-    isMember: membership.isMember,
-    memberStatus: membership.status,
+    type,
+    isMember: membership.isMember ?? true,
+    memberStatus: membership.status ?? 'member',
     createdAt: Date.now(),
     expiresAt: Date.now() + 7 * 24 * 60 * 60 * 1000,
   }
@@ -100,6 +235,26 @@ function getSession(req) {
   return session
 }
 
+// --- Anti-CSRF Verification Middleware for State-Changing Requests ---
+function verifyCsrf(req, res, next) {
+  if (['GET', 'HEAD', 'OPTIONS'].includes(req.method)) {
+    return next()
+  }
+  const session = getSession(req)
+  if (!session) {
+    return next()
+  }
+  const reqCsrf = req.headers['x-csrf-token']
+  if (!reqCsrf || reqCsrf !== session.csrfToken) {
+    return res.status(403).json({ ok: false, error: 'Invalid or missing CSRF token.' })
+  }
+  next()
+}
+
+app.use(verifyCsrf)
+
+// --- API Routes ---
+
 app.get('/api/health', (_req, res) => {
   res.json({
     ok: true,
@@ -108,12 +263,42 @@ app.get('/api/health', (_req, res) => {
   })
 })
 
-// Shared status board (all visitors see the same freelancers/status)
 app.get('/api/freelancers', (_req, res) => {
   res.json({
     ok: true,
     freelancers: storeApi.publicFreelancers(),
     updatedAt: storeApi.readStore().updatedAt,
+  })
+})
+
+app.post('/api/admin/login', adminLoginLimiter, (req, res) => {
+  const username = String(req.body?.username || '').trim()
+  const password = String(req.body?.password || '')
+
+  if (!username || !password) {
+    return res.status(400).json({ ok: false, error: 'Username and password are required.' })
+  }
+
+  const admin = storeApi.findAdmin(username, password)
+  if (!admin) {
+    return res.status(401).json({ ok: false, error: 'Incorrect username or password.' })
+  }
+
+  const session = createSession(
+    {
+      username: admin.username,
+      displayName: admin.displayName,
+      freelancerId: admin.freelancerId,
+    },
+    { isMember: true, status: 'admin' },
+    'admin',
+  )
+
+  return res.json({
+    ok: true,
+    token: session.token,
+    csrfToken: session.csrfToken,
+    user: session.user,
   })
 })
 
@@ -160,11 +345,47 @@ app.get('/api/auth/config', (_req, res) => {
   res.json({
     configured: configured(),
     botUsername: BOT_USERNAME || null,
-    channelUrl: process.env.VITE_TELEGRAM_CHANNEL || 'https://t.me/+uD81UyseH_tkZGU1',
+    channelUrl:
+      process.env.TELEGRAM_CHANNEL_URL ||
+      process.env.VITE_TELEGRAM_CHANNEL ||
+      'https://t.me/projectguider',
   })
 })
 
-app.post('/api/auth/telegram', async (req, res) => {
+app.post('/api/join-requests', joinRequestLimiter, (req, res) => {
+  const result = storeApi.createJoinRequest(req.body)
+  if (!result.ok) {
+    return res.status(result.code || 400).json(result)
+  }
+  return res.json(result)
+})
+
+app.get('/api/join-requests', (req, res) => {
+  const session = getSession(req)
+  if (!session) {
+    return res.status(401).json({ ok: false, error: 'Unauthorized.' })
+  }
+  return res.json({ ok: true, joinRequests: storeApi.readJoinRequests() })
+})
+
+app.post('/api/join-requests/:id/resolve', (req, res) => {
+  const session = getSession(req)
+  if (!session) {
+    return res.status(401).json({ ok: false, error: 'Unauthorized.' })
+  }
+  const result = storeApi.resolveJoinRequest({
+    requestId: req.params.id,
+    status: req.body?.status,
+    adminUsername: req.body?.username,
+    adminPassword: req.body?.password,
+  })
+  if (!result.ok) {
+    return res.status(result.code || 400).json(result)
+  }
+  return res.json(result)
+})
+
+app.post('/api/auth/telegram', telegramAuthLimiter, async (req, res) => {
   try {
     if (!configured()) {
       return res.status(503).json({
@@ -184,10 +405,10 @@ app.post('/api/auth/telegram', async (req, res) => {
 
     const user = {
       id: Number(payload.id),
-      firstName: payload.first_name || '',
-      lastName: payload.last_name || '',
-      username: payload.username || '',
-      photoUrl: payload.photo_url || '',
+      firstName: String(payload.first_name || '').slice(0, 100),
+      lastName: String(payload.last_name || '').slice(0, 100),
+      username: String(payload.username || '').slice(0, 100),
+      photoUrl: String(payload.photo_url || '').slice(0, 500),
     }
 
     const membership = await checkGroupMembership(user.id)
@@ -208,10 +429,11 @@ app.post('/api/auth/telegram', async (req, res) => {
       })
     }
 
-    const session = createSession(user, membership)
+    const session = createSession(user, membership, 'telegram')
     return res.json({
       ok: true,
       token: session.token,
+      csrfToken: session.csrfToken,
       user: session.user,
       isMember: true,
       memberStatus: session.memberStatus,
@@ -228,23 +450,26 @@ app.get('/api/auth/me', async (req, res) => {
     return res.status(401).json({ ok: false, error: 'Not logged in.' })
   }
 
-  const membership = await checkGroupMembership(session.user.id)
-  if (!membership.ok || !membership.isMember) {
-    sessions.delete(session.token)
-    return res.status(403).json({
-      ok: false,
-      error: 'You are not in the Telegram group anymore.',
-      isMember: false,
-    })
+  if (session.type === 'telegram') {
+    const membership = await checkGroupMembership(session.user.id)
+    if (!membership.ok || !membership.isMember) {
+      sessions.delete(session.token)
+      return res.status(403).json({
+        ok: false,
+        error: 'You are not in the Telegram group anymore.',
+        isMember: false,
+      })
+    }
+    session.isMember = true
+    session.memberStatus = membership.status
   }
 
-  session.isMember = true
-  session.memberStatus = membership.status
   return res.json({
     ok: true,
     user: session.user,
-    isMember: true,
-    memberStatus: membership.status,
+    csrfToken: session.csrfToken,
+    isMember: session.isMember,
+    memberStatus: session.memberStatus,
   })
 })
 
@@ -268,13 +493,12 @@ function collectAdminChatTargets(payload = {}) {
     if (chatId && !targets.includes(chatId)) targets.push(chatId)
   }
 
-  // Numeric chat id is reliable; @username often returns "chat not found"
   push(payload.notifyChatId)
 
   const freelancerId = String(payload.freelancerId || '').trim()
   if (freelancerId) {
     const envKey = `TELEGRAM_NOTIFY_${freelancerId}`.toUpperCase()
-    push(process.env[envKey] || process.env[`TELEGRAM_NOTIFY_${freelancerId}`])
+    push(process.env[envKey])
   }
 
   const username = String(payload.adminTelegram || '')
@@ -335,7 +559,7 @@ async function sendTelegramMessage(chatId, text) {
   return data
 }
 
-app.post('/api/bookings/notify', async (req, res) => {
+app.post('/api/bookings/notify', notifyLimiter, async (req, res) => {
   try {
     if (!BOT_TOKEN) {
       return res.status(503).json({
@@ -349,8 +573,7 @@ app.post('/api/bookings/notify', async (req, res) => {
     if (!targets.length) {
       return res.status(400).json({
         ok: false,
-        error:
-          'Admin Telegram username missing. Set it in Admin → Edit profile.',
+        error: 'Admin Telegram recipient missing.',
       })
     }
 
@@ -402,7 +625,6 @@ function onReady() {
   }
 }
 
-// cPanel LiteSpeed sets PORT. Local uses API_PORT / 8787.
 app.listen(PORT, onReady)
 
 module.exports = app

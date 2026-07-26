@@ -14,6 +14,7 @@ import { useLenis } from './hooks/useLenis'
 import { useStore } from './hooks/useStore'
 import { useTelegramAuth } from './hooks/useTelegramAuth'
 import { notifyAdminBooking } from './auth/telegramAuth'
+import { loginAdmin } from './api/storeApi'
 import {
   ensureNotifyPermission,
   pushBookingAlert,
@@ -137,18 +138,15 @@ export default function App() {
   }
 
   async function handleLogin(username, password) {
-    const account = store.findAdmin(username, password)
-
-    if (!account) {
-      return { ok: false, error: 'Incorrect username or password.' }
+    const res = await loginAdmin(username, password)
+    if (!res.ok) {
+      return { ok: false, error: res.error || 'Incorrect username or password.' }
     }
 
     const session = {
-      username: account.username,
-      displayName: account.displayName,
-      freelancerId: account.freelancerId,
-      // Kept for syncing status/profile to server so all visitors see updates
-      password,
+      username: res.user.username,
+      displayName: res.user.displayName,
+      freelancerId: res.user.freelancerId,
     }
     sessionStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(session))
     setAdminUser(session)
@@ -157,8 +155,8 @@ export default function App() {
     const permission = await ensureNotifyPermission()
     setToast(
       permission === 'granted'
-        ? `Welcome, ${account.displayName}! Booking alerts are ON.`
-        : `Welcome, ${account.displayName}! Enable alerts in the Admin panel.`,
+        ? `Welcome, ${res.user.displayName}! Booking alerts are ON.`
+        : `Welcome, ${res.user.displayName}! Enable alerts in the Admin panel.`,
     )
     return { ok: true }
   }
@@ -171,8 +169,8 @@ export default function App() {
   }
 
   function adminCredentials() {
-    if (!adminUser?.username || !adminUser?.password) return null
-    return { username: adminUser.username, password: adminUser.password }
+    if (!adminUser?.username) return null
+    return { username: adminUser.username }
   }
 
   async function handleSetStatus(id, status) {
@@ -217,9 +215,6 @@ export default function App() {
       adminCredentials(),
     )
     if (result.ok) {
-      const nextSession = { ...adminUser, password: payload.newPassword }
-      sessionStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(nextSession))
-      setAdminUser(nextSession)
       setToast('Password updated.')
     }
     return result
